@@ -1,109 +1,239 @@
-import EventEmitter from "./EventEmitter.js";
-
-export default function PeerManager(options) {
+export function PeerClient(options) {
     const peerConnection = new RTCPeerConnection({
         iceServers: options.iceServers,
     });
-    const eventEmitter = new EventEmitter();
 
-    const signalingChannel = options.signaling;
+    const clientId = options.clientId;
+    const localStream = options.localStream;
+    const signalingChannel = options.signalingChannel;
+
+    let clientStream;
+    let onstream = null;
 
     function log(...args) {
         console.log(
-            "%c[PeerManager]",
+            `%c[PeerConnection:${clientId}]`,
             "background-color: #0079c9; color: white",
             ...args,
         );
     }
 
-    function onConnectionStateChange(connectionState) {
-        log(`Connection state: ${connectionState}`)
-    }
+    function onLocalIceCandidate(candidate) {
+        log("Local ice candidate", candidate);
 
-    function onIceCandidate(candidate) {
-        log("Received ICE Candidate", candidate);
-        signalingChannel.sendCandidate(candidate);
+        signalingChannel.emitCandidate(clientId, candidate);
     }
 
     function onRemoteStream(stream) {
-        log("Received remote stream", stream);
+        log("client stream", stream);
 
-        eventEmitter.emit("stream", stream);
+        onstream?.({
+            clientId,
+            stream,
+        });
     }
 
-    async function onRemoteOffer(offer) {
+    async function addAnswer(answer) {
+        peerConnection.setRemoteDescription(answer);
+    }
+
+    async function addIceCandidate(candidate) {
+        peerConnection.addIceCandidate(candidate);
+    }
+
+    async function emitOffer() {
+        const offer = await peerConnection.createOffer({
+            offerToReceiveAudio: localStream.getAudioTracks().length > 0,
+            offerToReceiveVideo: localStream.getVideoTracks().length > 0,
+        });
+        peerConnection.setLocalDescription(offer);
+
+        signalingChannel.emitOffer(clientId, offer);
+    }
+
+    async function emitAnswer(offer) {
         peerConnection.setRemoteDescription(offer);
 
         const answer = await peerConnection.createAnswer();
         peerConnection.setLocalDescription(answer);
 
-        signalingChannel.sendAnswer(answer);
+        signalingChannel.emitAnswer(clientId, answer);
     }
 
-    async function onRemoteAnswer(answer) {
-        peerConnection.setRemoteDescription(answer);
+    peerConnection.onconnectionstatechange = () => {
+        log(`Connection state: ${peerConnection.connectionState}`);
     }
 
-    async function onRemoteCandidate(candidate) {
-        peerConnection.addIceCandidate(candidate);
+    peerConnection.onicecandidate = (event) => {
+        if (event.candidate) onLocalIceCandidate(event.candidate);
     }
 
-    function StartHandlers() {
-        peerConnection.onconnectionstatechange = () => {
-            onConnectionStateChange(peerConnection.connectionState);
+    peerConnection.ontrack = (event) => {
+        if (clientStream && event.track) {
+            clientStream.addTrack(event.track);
+            return;
         }
 
-        peerConnection.onicecandidate = (event) => {
-            if (event.candidate) onIceCandidate(event.candidate);
-        }
+        clientStream = event.streams?.[0] || new MediaStream(event.track);
 
-        peerConnection.ontrack = (event) => {
-            const stream = event.streams?.[0] || new MediaStream(event.track);
+        onRemoteStream(clientStream);
+    };
 
-            onRemoteStream({
-                isRemote: true,
-                stream,
-            });
-        };
+    localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+    });
 
-        signalingChannel.onOffer = onRemoteOffer;
-        signalingChannel.onAnswer = onRemoteAnswer;
-        signalingChannel.onCandidate = onRemoteCandidate;
-    }
+    function close() {
+        peerConnection.close();
+        peerConnection.onconnectionstatechange = null;
+        peerConnection.onicecandidate = null;
+        peerConnection.ontrack = null;
 
-    async function StartLocalStream() {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: !!options.audio,
-            video: !!options.video,
-        });
-
-        log("Started local stream", stream);
-
-        for (const track of stream.getTracks()) {
-            peerConnection.addTrack(track, stream);
-        }
-
-        eventEmitter.emit("stream", {
-            isRemote: false,
-            stream,
-        });
-
-        const offer = await peerConnection.createOffer({
-            offerToReceiveAudio: !!options.audio,
-            offerToReceiveVideo: !!options.video,
-        });
-
-        peerConnection.setLocalDescription(offer);
-        signalingChannel.sendOffer(offer);
+        clientStream?.getTracks().forEach(track => track.stop());
     }
 
     return {
-        addEventListener: (event, callback) => eventEmitter.on(event, callback),
-        removeEventListener: (event, callback) => eventEmitter.off(event, callback),
+        emitOffer,
+        emitAnswer,
+        addAnswer,
+        addIceCandidate,
+        close,
 
-        start() {
-            StartHandlers();
-            StartLocalStream();
+        get id() {
+            return clientId;
         },
+
+        get stream() {
+            return clientStream;
+        },
+
+        get onstream() {
+            return onstream;
+        },
+        set onstream(value) {
+            onstream = value;
+        }
+    }
+}
+
+export default function PeerManager(options) {
+    const signalingChannel = options.signalingChannel;
+    const clients = new Map();
+
+    let localStream;
+    let onstream = null;
+
+    function log(...args) {
+        console.log(
+            `%c[PeerManager]`,
+            "background-color: #0079c9; color: white",
+            ...args,
+        );
+    }
+
+    function GetOrCreateClient(clientId) {
+        if (clients.has(clientId)) return clients.get(clientId);
+
+        const client = PeerClient({
+            localStream,
+            clientId,
+            signalingChannel,
+            iceServers: options.iceServers,
+        });
+
+        client.onstream = (...args) => onstream?.(...args);
+
+        clients.set(clientId, client);
+
+        return client;
+    }
+
+    function onClientJoin(clientId) {
+        log("client join", clientId);
+
+        GetOrCreateClient(clientId).emitOffer();
+    }
+
+    function onClientOffer(clientId, offer) {
+        log("client offer", clientId, offer);
+
+        GetOrCreateClient(clientId).emitAnswer(offer);
+    }
+
+    function onClientAnswer(clientId, answer) {
+        if (!clients.has(clientId)) return;
+
+        log("client answer", clientId, answer);
+
+        clients.get(clientId).addAnswer(answer);
+    }
+
+    function onClientIceCandidate(clientId, candidate) {
+        if (!clients.has(clientId)) return;
+
+        log("client ice candidate", clientId, candidate);
+
+        clients.get(clientId).addIceCandidate(candidate);
+    }
+
+    function onClientLeave(clientId) {
+        if (!clients.has(clientId)) return;
+
+        log("client leave", clientId);
+
+        clients.get(clientId).close();
+        clients.delete(clientId);
+    }
+
+    async function start() {
+        if (localStream) throw new Error("already initialized");
+
+        localStream = await navigator.mediaDevices.getUserMedia({
+            audio: options.audio,
+            video: options.video,
+        });
+
+        log("Started local stream", localStream);
+
+        signalingChannel.onjoin = onClientJoin;
+        signalingChannel.onoffer = onClientOffer;
+        signalingChannel.onanswer = onClientAnswer;
+        signalingChannel.onicecandidate = onClientIceCandidate;
+        signalingChannel.onleave = onClientLeave;
+
+        onstream?.({
+            clientId: null,
+            stream: localStream,
+        });
+    }
+
+    function stop() {
+        clients.forEach(client => client.close());
+        clients.clear();
+
+        localStream?.getTracks().forEach(track => track.stop());
+        localStream = null;
+    }
+
+    return {
+        start,
+        stop,
+
+        get signalingChannel() {
+            return signalingChannel;
+        },
+        get localStream() {
+            return localStream;
+        },
+        get clients() {
+            return clients;
+        },
+
+        get onstream() {
+            return onstream;
+        },
+        set onstream(value) {
+            onstream = value;
+        }
     }
 }

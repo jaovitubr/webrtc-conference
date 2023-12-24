@@ -1,38 +1,47 @@
 const express = require("express");
 const app = express();
-const fs = require("fs");
-
-const http = require("https").createServer({
-    key: fs.readFileSync("./certificate/key.pem"),
-    cert: fs.readFileSync("./certificate/cert.pem")
-}, app);
-
+const http = require("http").Server(app);
 const io = require("socket.io")(http);
 
 app.use(express.static("public"));
 
+app.get("/rooms", (req, res) => {
+    res.json([]);
+});
+
 io.on("connection", (socket) => {
-    const room = socket.handshake.query.room;
+    let currentRoom;
 
-    socket.join(room);
-    console.log("user connected to room", room);
+    socket.on("join", (newRoom) => {
+        if (currentRoom) {
+            socket.leave(currentRoom);
+            socket.broadcast.to(currentRoom).emit("leave", socket.id);
+        }
 
-    socket.on("candidate", (data) => {
-        console.log("candidate", data);
-        socket.broadcast.to(room).emit("candidate", data);
+        socket.join(newRoom);
+        socket.broadcast.to(newRoom).emit("join", socket.id);
+
+        currentRoom = newRoom;
     });
 
-    socket.on("offer", (data) => {
-        console.log("offer", data);
-        socket.broadcast.to(room).emit("offer", data);
+    socket.on("candidate", (clientId, data) => {
+        socket.broadcast.to(clientId).emit("candidate", socket.id, data);
     });
 
-    socket.on("answer", (data) => {
-        console.log("answer", data);
-        socket.broadcast.to(room).emit("answer", data);
+    socket.on("offer", (clientId, data) => {
+        socket.broadcast.to(clientId).emit("offer", socket.id, data);
+    });
+
+    socket.on("answer", (clientId, data) => {
+        socket.broadcast.to(clientId).emit("answer", socket.id, data);
+    });
+
+    socket.on("disconnect", () => {
+        if (!currentRoom) return;
+        socket.broadcast.to(currentRoom).emit("leave", socket.id);
     });
 });
 
-http.listen(443, () => {
-    console.log("listening on *:443");
+http.listen(3000, () => {
+    console.log(`Listening on port ${http.address().port}`);
 });
