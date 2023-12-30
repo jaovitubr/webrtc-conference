@@ -11,7 +11,7 @@ const peer = PeerManager({
     iceServers,
     signalingChannel: new WebSocketSignalingChannel("wss://jzv15f4oha.execute-api.sa-east-1.amazonaws.com/dev"),
 });
-
+window.peer = peer
 async function JoinRoom(room) {
     peer.stop();
     await peer.start();

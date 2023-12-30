@@ -5,6 +5,12 @@ export class WebSocketSignalingChannel {
     onicecandidate = null;
     onanswer = null;
 
+    room = null;
+
+    currentSeq = 1;
+    queueIsProcessing = false;
+    queue = [];
+
     constructor(endpoint) {
         this.endpoint = endpoint;
 
@@ -20,6 +26,10 @@ export class WebSocketSignalingChannel {
         const message = JSON.parse(event.data);
 
         switch (message.type) {
+            case "response":
+                const queueItem = this.queue.find(item => item.seq === message.seq);
+                queueItem?.handleResponse(message);
+                break;
             case "join":
                 this.onjoin?.(message.connectionId);
                 break;
@@ -64,23 +74,85 @@ export class WebSocketSignalingChannel {
         return this.socketConnection;
     }
 
-    async #emit(type, data) {
-        const socket = await this.socketConnection;
+    async #queueConsume() {
+        if (this.queueIsProcessing) return;
 
-        socket?.send(JSON.stringify({
-            type,
-            ...data,
-        }));
+        const item = this.queue[0];
+        if (!item) return;
+
+        this.queueIsProcessing = true;
+
+        const timeout = setTimeout(() => {
+            console.log(item)
+            item.callback?.(new Error("timeout"), null);
+
+            this.queue = this.queue.filter(_item => _item != item);
+            this.queueIsProcessing = false;
+            this.#queueConsume();
+        }, 5000);
+
+        try {
+            const socket = await this.socketConnection;
+
+            item.handleResponse = (res) => {
+                clearTimeout(timeout);
+
+                item.callback?.(null, res);
+
+                this.queue = this.queue.filter(_item => _item != item);
+                this.queueIsProcessing = false;
+                this.#queueConsume();
+            }
+
+            socket?.send(JSON.stringify(item));
+        } catch (error) {
+            clearTimeout(timeout);
+
+            item.callback?.(error, null);
+
+            this.queue = this.queue.filter(_item => _item != item);
+            this.queueIsProcessing = false;
+            this.#queueConsume();
+        }
+    }
+
+    async #emit(type, data) {
+        return new Promise((resolve, reject) => {
+            const callback = (err, res) => {
+                if (err) reject(err);
+                else resolve(res);
+            }
+
+            const seq = this.currentSeq++;
+
+            this.queue.push({
+                type,
+                seq,
+                room: this.room,
+                ...data,
+                callback,
+            });
+
+            this.#queueConsume();
+        });
     }
 
     async join(room) {
         clearTimeout(this.reconnectTimeout);
+
+        this.queue.forEach(item => {
+            item.callback?.(new Error("aborted"), null);
+        });
+        this.currentSeq = 1;
+        this.queue = [];
 
         this.socketConnection?.then(socket => {
             socket.onclose = null;
             socket.close();
         });
         this.socketConnection = null;
+
+        this.room = room;
 
         try {
             const socket = await this.#socketConnect(room);
