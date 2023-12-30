@@ -3,7 +3,7 @@ export function PeerClient(options) {
         iceServers: options.iceServers,
     });
 
-    const clientId = options.clientId;
+    const connectionId = options.connectionId;
     const localStream = options.localStream;
     const signalingChannel = options.signalingChannel;
 
@@ -12,7 +12,7 @@ export function PeerClient(options) {
 
     function log(...args) {
         console.log(
-            `%c[PeerConnection:${clientId}]`,
+            `%c[PeerConnection:${connectionId}]`,
             "background-color: #0079c9; color: white",
             ...args,
         );
@@ -21,14 +21,14 @@ export function PeerClient(options) {
     function onLocalIceCandidate(candidate) {
         log("Local ice candidate", candidate);
 
-        signalingChannel.emitCandidate(clientId, candidate);
+        signalingChannel.emitCandidate(connectionId, candidate);
     }
 
     function onRemoteStream(stream) {
         log("client stream", stream);
 
         onstream?.({
-            clientId,
+            connectionId,
             stream,
         });
     }
@@ -48,7 +48,7 @@ export function PeerClient(options) {
         });
         peerConnection.setLocalDescription(offer);
 
-        signalingChannel.emitOffer(clientId, offer);
+        signalingChannel.emitOffer(connectionId, offer);
     }
 
     async function emitAnswer(offer) {
@@ -57,7 +57,7 @@ export function PeerClient(options) {
         const answer = await peerConnection.createAnswer();
         peerConnection.setLocalDescription(answer);
 
-        signalingChannel.emitAnswer(clientId, answer);
+        signalingChannel.emitAnswer(connectionId, answer);
     }
 
     peerConnection.onconnectionstatechange = () => {
@@ -100,7 +100,7 @@ export function PeerClient(options) {
         close,
 
         get id() {
-            return clientId;
+            return connectionId;
         },
 
         get stream() {
@@ -131,58 +131,58 @@ export default function PeerManager(options) {
         );
     }
 
-    function GetOrCreateClient(clientId) {
-        if (clients.has(clientId)) return clients.get(clientId);
+    function GetOrCreateClient(connectionId) {
+        if (clients.has(connectionId)) return clients.get(connectionId);
 
         const client = PeerClient({
             localStream,
-            clientId,
+            connectionId,
             signalingChannel,
             iceServers: options.iceServers,
         });
 
         client.onstream = (...args) => onstream?.(...args);
 
-        clients.set(clientId, client);
+        clients.set(connectionId, client);
 
         return client;
     }
 
-    function onClientJoin(clientId) {
-        log("client join", clientId);
+    function onClientJoin(connectionId) {
+        log("client join", connectionId);
 
-        GetOrCreateClient(clientId).emitOffer();
+        GetOrCreateClient(connectionId).emitOffer();
     }
 
-    function onClientOffer(clientId, offer) {
-        log("client offer", clientId, offer);
+    function onClientOffer(connectionId, offer) {
+        log("client offer", connectionId, offer);
 
-        GetOrCreateClient(clientId).emitAnswer(offer);
+        GetOrCreateClient(connectionId).emitAnswer(offer);
     }
 
-    function onClientAnswer(clientId, answer) {
-        if (!clients.has(clientId)) return;
+    function onClientAnswer(connectionId, answer) {
+        if (!clients.has(connectionId)) return;
 
-        log("client answer", clientId, answer);
+        log("client answer", connectionId, answer);
 
-        clients.get(clientId).addAnswer(answer);
+        clients.get(connectionId).addAnswer(answer);
     }
 
-    function onClientIceCandidate(clientId, candidate) {
-        if (!clients.has(clientId)) return;
+    function onClientIceCandidate(connectionId, candidate) {
+        if (!clients.has(connectionId)) return;
 
-        log("client ice candidate", clientId, candidate);
+        log("client ice candidate", connectionId, candidate);
 
-        clients.get(clientId).addIceCandidate(candidate);
+        clients.get(connectionId).addIceCandidate(candidate);
     }
 
-    function onClientLeave(clientId) {
-        if (!clients.has(clientId)) return;
+    function onClientLeave(connectionId) {
+        if (!clients.has(connectionId)) return;
 
-        log("client leave", clientId);
+        log("client leave", connectionId);
 
-        clients.get(clientId).close();
-        clients.delete(clientId);
+        clients.get(connectionId).close();
+        clients.delete(connectionId);
     }
 
     async function start() {
@@ -202,7 +202,7 @@ export default function PeerManager(options) {
         signalingChannel.onleave = onClientLeave;
 
         onstream?.({
-            clientId: null,
+            connectionId: null,
             stream: localStream,
         });
     }

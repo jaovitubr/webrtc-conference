@@ -5,7 +5,9 @@ export class WebSocketSignalingChannel {
     onicecandidate = null;
     onanswer = null;
 
-    constructor() {
+    constructor(endpoint) {
+        this.endpoint = endpoint;
+
         setInterval(() => {
             if (this.socket?.readyState !== 1) return;
             this.socket.send("\r\n");
@@ -13,35 +15,35 @@ export class WebSocketSignalingChannel {
     }
 
     #socketHandle(event) {
-        if (event.data === "\r\n") return;
+        if (!event.data) return;
 
         const message = JSON.parse(event.data);
 
         switch (message.type) {
             case "join":
-                this.onjoin?.(message.clientId);
+                this.onjoin?.(message.connectionId);
                 break;
             case "leave":
-                this.onleave?.(message.clientId);
+                this.onleave?.(message.connectionId);
                 break;
             case "offer":
                 const offer = new RTCSessionDescription(message.data);
-                this.onoffer?.(message.clientId, offer);
+                this.onoffer?.(message.connectionId, offer);
                 break;
             case "candidate":
                 const candidate = new RTCIceCandidate(message.data);
-                this.onicecandidate?.(message.clientId, candidate);
+                this.onicecandidate?.(message.connectionId, candidate);
                 break;
             case "answer":
                 const answer = new RTCSessionDescription(message.data);
-                this.onanswer?.(message.clientId, answer);
+                this.onanswer?.(message.connectionId, answer);
                 break;
         }
     }
 
     #socketConnect(room) {
         this.socketConnection = new Promise((resolve, reject) => {
-            const url = new URL("ws://127.0.0.1:8787/walkie_talkie");
+            const url = new URL(this.endpoint);
             url.searchParams.set("room", room);
 
             const ws = new WebSocket(url);
@@ -66,8 +68,8 @@ export class WebSocketSignalingChannel {
         const socket = await this.socketConnection;
 
         socket?.send(JSON.stringify({
-            ...data,
             type,
+            ...data,
         }));
     }
 
@@ -96,23 +98,23 @@ export class WebSocketSignalingChannel {
         }
     }
 
-    emitOffer(clientId, offer) {
-        this.#emit("offer", {
-            clientId,
+    emitOffer(connectionId, offer) {
+        return this.#emit("offer", {
+            connectionId,
             data: offer,
         });
     }
 
-    emitCandidate(clientId, candidate) {
-        this.#emit("candidate", {
-            clientId,
+    emitCandidate(connectionId, candidate) {
+        return this.#emit("candidate", {
+            connectionId,
             data: candidate,
         });
     }
 
-    emitAnswer(clientId, answer) {
-        this.#emit("answer", {
-            clientId,
+    emitAnswer(connectionId, answer) {
+        return this.#emit("answer", {
+            connectionId,
             data: answer,
         });
     }
@@ -128,24 +130,24 @@ export class SocketIOSignalingChannel {
     constructor() {
         this.socket = io();
 
-        this.socket.on("join", (clientId) => {
-            this.onjoin?.(clientId);
+        this.socket.on("join", (connectionId) => {
+            this.onjoin?.(connectionId);
         });
 
-        this.socket.on("leave", (clientId) => {
-            this.onleave?.(clientId);
+        this.socket.on("leave", (connectionId) => {
+            this.onleave?.(connectionId);
         });
 
-        this.socket.on("offer", (clientId, data) => {
-            this.onoffer?.(clientId, new RTCSessionDescription(data));
+        this.socket.on("offer", (connectionId, data) => {
+            this.onoffer?.(connectionId, new RTCSessionDescription(data));
         });
 
-        this.socket.on("candidate", (clientId, data) => {
-            this.onicecandidate?.(clientId, new RTCIceCandidate(data));
+        this.socket.on("candidate", (connectionId, data) => {
+            this.onicecandidate?.(connectionId, new RTCIceCandidate(data));
         });
 
-        this.socket.on("answer", (clientId, data) => {
-            this.onanswer?.(clientId, new RTCSessionDescription(data));
+        this.socket.on("answer", (connectionId, data) => {
+            this.onanswer?.(connectionId, new RTCSessionDescription(data));
         });
     }
 
@@ -153,15 +155,15 @@ export class SocketIOSignalingChannel {
         this.socket.emit("join", room);
     }
 
-    emitOffer(clientId, offer) {
-        this.socket.emit("offer", clientId, offer);
+    emitOffer(connectionId, offer) {
+        this.socket.emit("offer", connectionId, offer);
     }
 
-    emitCandidate(clientId, candidate) {
-        this.socket.emit("candidate", clientId, candidate);
+    emitCandidate(connectionId, candidate) {
+        this.socket.emit("candidate", connectionId, candidate);
     }
 
-    emitAnswer(clientId, answer) {
-        this.socket.emit("answer", clientId, answer);
+    emitAnswer(connectionId, answer) {
+        this.socket.emit("answer", connectionId, answer);
     }
 }

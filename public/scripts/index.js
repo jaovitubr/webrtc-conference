@@ -9,7 +9,7 @@ const iceServers = [
 const peer = PeerManager({
     audio: true,
     iceServers,
-    signalingChannel: new WebSocketSignalingChannel(),
+    signalingChannel: new WebSocketSignalingChannel("wss://jzv15f4oha.execute-api.sa-east-1.amazonaws.com/dev"),
 });
 
 async function JoinRoom(room) {
@@ -40,11 +40,11 @@ window.addEventListener("mouseup", function () {
 });
 
 function handleStream(event) {
-    if (!event.clientId) return;
+    if (!event.connectionId) return;
 
     const audioElem = document.createElement("audio");
 
-    audioElem.dataset.id = event.clientId;
+    audioElem.dataset.id = event.connectionId;
     audioElem.controls = true;
     audioElem.autoplay = true;
     audioElem.playsinline = true;
